@@ -93,9 +93,21 @@ Everything LazySSH already did well — non-destructive config edits, automatic 
 
 ### SFTP File Browser
 
-Select a host and press `Shift+F` to open the two-pane browser. The left pane starts in the local working directory and the right pane starts in the remote login directory. Use `Tab` or the left/right arrows to change panes, and `Enter` or a click to open a directory. Select a file and press `u` to upload or `d` to download. `r` refreshes both panes and `Esc` returns to the servers list.
+Select a host and press `Shift+F` to open the SFTP browser. The left pane starts in the local working directory and the right pane starts in the remote login directory. Click or use the up/down keys to select an item. `Tab` or the left/right arrows switch panes. Press `Enter` or double-click to open a directory or preview a text file.
 
-The remote host must provide an SFTP subsystem. The browser uses the host's OpenSSH configuration and can reuse its saved Keychain password for direct, trusted password-authenticated connections. The connection dialog offers a manual retry when needed. Transfers operate on individual regular files and preserve existing files with the same name.
+| Key | SFTP action |
+| --- | --- |
+| `u` / `d` | Upload / download the selected file or directory, recursively for directories |
+| `p` | Preview up to 256 KiB of UTF-8 text |
+| `F2` / `Del` | Rename / delete an item in the active pane. Delete requires confirmation. |
+| `n` / `g` / `b` | Create a directory / go to a path / open bookmarks |
+| `/` / `h` / `s` | Filter by name / toggle hidden files / choose a sort order |
+| `r` / `m` | Refresh both panes / open the action menu |
+| `Esc` | Cancel an active transfer or return to the host list |
+
+The action menu also provides properties, octal permissions, move, duplicate, empty-file creation, directory history, recursive filename search, comparison, and retry. Directory comparison shows differences in immediate entries using their types, sizes, and modification times. Each transfer handles one selected item and displays progress. If a destination exists, keep it, save under a new name, or explicitly replace a regular file when the server supports atomic replacement. The browser transfers regular files and directories. Symbolic links or special files inside a selected directory cause the transfer to stop before publishing the destination. A disconnection may leave a temporary `.moshpit-transfer-*` item on the destination.
+
+The remote host must provide an SFTP subsystem. The browser uses the host's OpenSSH configuration and can reuse its saved Keychain password for direct, trusted password-authenticated connections. The connection dialog offers a manual retry when needed.
 
 ### Upcoming
 - 🔑 SSH Key Deployment Features:

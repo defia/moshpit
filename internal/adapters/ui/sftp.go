@@ -15,7 +15,8 @@
 package ui
 
 import (
-	"errors"
+	"cmp"
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/gdamore/tcell/v2"
@@ -67,17 +69,23 @@ func (t *tui) openSFTP(alias string, manual bool) {
 }
 
 type sftpEntry struct {
-	name string
-	mode fs.FileMode
-	size int64
+	name     string
+	mode     fs.FileMode
+	size     int64
+	modified time.Time
 }
 
 type sftpPanel struct {
-	list    *tview.List
-	label   string
-	dir     string
-	entries []sftpEntry
-	remote  bool
+	list          *tview.List
+	label         string
+	dir           string
+	entries       []sftpEntry
+	files         []sftpEntry
+	remote        bool
+	showHidden    bool
+	filter        string
+	sortBy        int
+	back, forward []string
 }
 
 func newSFTPPanel(label string, remote bool) *sftpPanel {
@@ -85,7 +93,7 @@ func newSFTPPanel(label string, remote bool) *sftpPanel {
 		SetSelectedFocusOnly(true).SetHighlightFullLine(true).
 		SetSelectedTextColor(ActiveTheme.Base).SetSelectedBackgroundColor(ActiveTheme.Blue)
 	list.SetBorder(true).SetTitleAlign(tview.AlignLeft).SetTitle(" " + label + " ")
-	return &sftpPanel{list: list, label: label, remote: remote}
+	return &sftpPanel{list: list, label: label, remote: remote, showHidden: true}
 }
 
 func (p *sftpPanel) join(dir, name string) string {
@@ -103,14 +111,23 @@ func (p *sftpPanel) selected() (sftpEntry, bool) {
 	return p.entries[i], true
 }
 
-func (p *sftpPanel) update(dir string, entries []sftpEntry) {
+func (p *sftpPanel) update(dir string, files []sftpEntry) {
 	selected, keepSelection := p.selected()
 	keepSelection = keepSelection && dir == p.dir
-	p.dir, p.entries = dir, entries
+	p.dir, p.files = dir, files
+	p.entries = p.entries[:0]
 	p.list.Clear()
 	p.list.SetTitle(" " + p.label + " · " + tview.Escape(displaySFTPText(dir)) + " ")
+	filter := strings.ToLower(p.filter)
+	for _, entry := range files {
+		if entry.name == ".." || (p.showHidden || !strings.HasPrefix(entry.name, ".")) &&
+			strings.Contains(strings.ToLower(entry.name), filter) {
+			p.entries = append(p.entries, entry)
+		}
+	}
+	slices.SortStableFunc(p.entries, p.compare)
 	selectedIndex := 0
-	for i, entry := range entries {
+	for i, entry := range p.entries {
 		label := displaySFTPText(entry.name)
 		switch {
 		case entry.mode.IsDir():
@@ -128,22 +145,59 @@ func (p *sftpPanel) update(dir string, entries []sftpEntry) {
 	p.list.SetCurrentItem(selectedIndex)
 }
 
+func (p *sftpPanel) compare(a, b sftpEntry) int {
+	if a.name == ".." || b.name == ".." {
+		if a.name == b.name {
+			return 0
+		}
+		if a.name == ".." {
+			return -1
+		}
+		return 1
+	}
+	if a.mode.IsDir() != b.mode.IsDir() {
+		if a.mode.IsDir() {
+			return -1
+		}
+		return 1
+	}
+	switch p.sortBy {
+	case 1:
+		return compareSFTPNames(b.name, a.name)
+	case 2:
+		if order := cmp.Compare(b.size, a.size); order != 0 {
+			return order
+		}
+	case 3:
+		if order := b.modified.Compare(a.modified); order != 0 {
+			return order
+		}
+	}
+	return compareSFTPNames(a.name, b.name)
+}
+
 type sftpBrowser struct {
-	app     *tview.Application
-	session ports.SFTPSession
-	root    *tview.Flex
-	local   *sftpPanel
-	remote  *sftpPanel
-	status  *tview.TextView
-	done    chan struct{}
-	closed  bool
-	busy    bool
-	onClose func()
+	app            *tview.Application
+	session        ports.SFTPSession
+	root           *tview.Flex
+	local          *sftpPanel
+	remote         *sftpPanel
+	status         *tview.TextView
+	done           chan struct{}
+	closed         bool
+	busy           bool
+	onClose        func()
+	active         *sftpPanel
+	alias          string
+	remoteHome     string
+	cancelTransfer context.CancelFunc
+	cancelling     bool
+	lastTransfer   *ports.SFTPTransfer
 }
 
 func newSFTPBrowser(app *tview.Application, session ports.SFTPSession, alias string, onClose func()) *sftpBrowser {
 	b := &sftpBrowser{
-		app: app, session: session, onClose: onClose, done: make(chan struct{}),
+		app: app, session: session, onClose: onClose, done: make(chan struct{}), alias: alias,
 		local: newSFTPPanel("Local", false), remote: newSFTPPanel("Remote", true),
 		status: tview.NewTextView().SetWrap(false),
 	}
@@ -151,19 +205,33 @@ func newSFTPBrowser(app *tview.Application, session ports.SFTPSession, alias str
 	if b.local.dir == "" {
 		b.local.dir = "."
 	}
+	b.active = b.local
 	for _, panel := range []*sftpPanel{b.local, b.remote} {
-		panel.list.SetSelectedFunc(func(index int, _, _ string, _ rune) {
-			if index >= 0 && index < len(panel.entries) && panel.entries[index].mode.IsDir() {
-				b.openDirectory(panel, panel.join(panel.dir, panel.entries[index].name))
+		panel.list.SetFocusFunc(func() { b.active = panel })
+		panel.list.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+			if action == tview.MouseLeftDoubleClick {
+				x, y := event.Position()
+				left, top, width, height := panel.list.GetInnerRect()
+				if x >= left && x < left+width && y >= top && y < top+height {
+					b.app.SetFocus(panel.list)
+					offset, _ := panel.list.GetOffset()
+					if index := offset + y - top; index < len(panel.entries) {
+						panel.list.SetCurrentItem(index)
+						b.openSelected()
+					}
+					return tview.MouseConsumed, nil
+				}
 			}
+			return action, event
 		})
 	}
 	panels := tview.NewFlex().AddItem(b.local.list, 0, 1, true).AddItem(b.remote.list, 0, 1, false)
 	buttons := tview.NewFlex().
-		AddItem(tview.NewButton("u  Upload →").SetSelectedFunc(func() { b.transfer(b.local, b.remote) }), 0, 1, false).
-		AddItem(tview.NewButton("d  ← Download").SetSelectedFunc(func() { b.transfer(b.remote, b.local) }), 0, 1, false).
-		AddItem(tview.NewButton("r  Refresh").SetSelectedFunc(b.refresh), 0, 1, false).
-		AddItem(tview.NewButton("Esc  Close").SetSelectedFunc(b.close), 0, 1, false)
+		AddItem(tview.NewButton("u Upload →").SetSelectedFunc(func() { b.transfer(b.local, b.remote) }), 0, 1, false).
+		AddItem(tview.NewButton("d ← Download").SetSelectedFunc(func() { b.transfer(b.remote, b.local) }), 0, 1, false).
+		AddItem(tview.NewButton("Enter Open").SetSelectedFunc(b.openSelected), 0, 1, false).
+		AddItem(tview.NewButton("m Actions").SetSelectedFunc(b.actions), 0, 1, false).
+		AddItem(tview.NewButton("Esc Back").SetSelectedFunc(b.backOrCancel), 0, 1, false)
 	header := tview.NewTextView().SetText(" SFTP · " + displaySFTPText(alias)).
 		SetTextColor(ActiveTheme.Blue)
 	b.root = tview.NewFlex().SetDirection(tview.FlexRow).
@@ -178,10 +246,25 @@ func newSFTPBrowser(app *tview.Application, session ports.SFTPSession, alias str
 func (b *sftpBrowser) handleKey(event *tcell.EventKey) *tcell.EventKey {
 	switch event.Key() {
 	case tcell.KeyEscape:
-		b.close()
+		b.backOrCancel()
+		return nil
+	case tcell.KeyEnter:
+		if b.app.GetFocus() == b.active.list {
+			b.openSelected()
+			return nil
+		}
+		return event
+	case tcell.KeyF2:
+		b.renameOrMove(false)
+		return nil
+	case tcell.KeyDelete:
+		b.deleteSelected()
+		return nil
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		b.upDirectory()
 		return nil
 	case tcell.KeyTab, tcell.KeyBacktab:
-		if b.app.GetFocus() == b.local.list {
+		if b.active == b.local {
 			b.app.SetFocus(b.remote.list)
 		} else {
 			b.app.SetFocus(b.local.list)
@@ -201,6 +284,22 @@ func (b *sftpBrowser) handleKey(event *tcell.EventKey) *tcell.EventKey {
 		b.transfer(b.remote, b.local)
 	case 'r':
 		b.refresh()
+	case 'm':
+		b.actions()
+	case 'p':
+		b.preview()
+	case 'g':
+		b.goToPath()
+	case 'h':
+		b.toggleHidden()
+	case 's':
+		b.sortMenu()
+	case '/':
+		b.filterMenu()
+	case 'n':
+		b.newDirectory()
+	case 'b':
+		b.bookmarks()
 	default:
 		return event
 	}
@@ -212,13 +311,16 @@ func (b *sftpBrowser) close() {
 		return
 	}
 	b.closed = true
+	if b.cancelTransfer != nil {
+		b.cancelTransfer()
+	}
 	close(b.done)
 	go b.session.Close()
 	b.onClose()
 }
 
 func (b *sftpBrowser) run(message string, work func() func()) {
-	if b.busy {
+	if b.busy || b.closed {
 		return
 	}
 	b.busy = true
@@ -244,37 +346,25 @@ func (b *sftpBrowser) setStatus(message string, color tcell.Color) {
 }
 
 func (b *sftpBrowser) loadDirectory(remote bool, dir string) (string, []sftpEntry, error) {
-	var entries []sftpEntry
-	if remote {
-		if dir == "" {
-			var err error
-			dir, err = b.session.Getwd()
-			if err != nil {
-				return "", nil, err
-			}
-		}
-		files, err := b.session.ReadDir(dir)
+	if remote && dir == "" {
+		var err error
+		dir, err = b.session.Getwd()
 		if err != nil {
-			return dir, nil, err
-		}
-		for _, info := range files {
-			if validSFTPName(info.Name()) {
-				entries = append(entries, sftpEntry{info.Name(), info.Mode(), info.Size()})
-			}
-		}
-	} else {
-		files, err := os.ReadDir(dir)
-		if err != nil {
-			return dir, nil, err
-		}
-		for _, file := range files {
-			info, err := file.Info()
-			if err == nil && validSFTPName(file.Name()) {
-				entries = append(entries, sftpEntry{file.Name(), info.Mode(), info.Size()})
-			}
+			return "", nil, err
 		}
 	}
-	slices.SortFunc(entries, compareSFTPEntries)
+	files, err := b.session.Files(remote).ReadDir(dir)
+	if err != nil {
+		return dir, nil, err
+	}
+	entries := make([]sftpEntry, 0, len(files)+1)
+	for _, info := range files {
+		if validSFTPName(info.Name()) {
+			entries = append(entries, sftpEntry{
+				name: info.Name(), mode: info.Mode(), size: info.Size(), modified: info.ModTime(),
+			})
+		}
+	}
 	parent := filepath.Dir(dir)
 	if remote {
 		parent = path.Dir(dir)
@@ -296,6 +386,9 @@ func (b *sftpBrowser) refresh() {
 			}
 			if remoteErr == nil {
 				b.remote.update(remoteDir, remote)
+				if b.remoteHome == "" {
+					b.remoteHome = remoteDir
+				}
 			}
 			switch {
 			case localErr != nil:
@@ -303,13 +396,13 @@ func (b *sftpBrowser) refresh() {
 			case remoteErr != nil:
 				b.setStatus("Remote directory: "+remoteErr.Error(), ActiveTheme.Red)
 			default:
-				b.setStatus("Tab or ←/→ switches panes · Enter or click opens a directory", ActiveTheme.Subtext0)
+				b.setStatus("Tab switches panes · Click selects · Double-click opens · m Actions", ActiveTheme.Subtext0)
 			}
 		}
 	})
 }
 
-func (b *sftpBrowser) openDirectory(panel *sftpPanel, dir string) {
+func (b *sftpBrowser) navigate(panel *sftpPanel, dir string, onSuccess func()) {
 	b.run("Reading "+panel.label+" directory…", func() func() {
 		dir, entries, err := b.loadDirectory(panel.remote, dir)
 		return func() {
@@ -317,75 +410,36 @@ func (b *sftpBrowser) openDirectory(panel *sftpPanel, dir string) {
 				b.setStatus(err.Error(), ActiveTheme.Red)
 				return
 			}
+			onSuccess()
+			panel.filter = ""
 			panel.update(dir, entries)
 			b.setStatus("", ActiveTheme.Text)
 		}
 	})
 }
 
-func (b *sftpBrowser) transfer(from, to *sftpPanel) {
-	if b.busy {
+func (b *sftpBrowser) openDirectory(panel *sftpPanel, dir string) {
+	if b.busy || dir == panel.dir {
 		return
 	}
-	entry, selected := from.selected()
-	if !selected || !entry.mode.IsRegular() || !validSFTPName(entry.name) {
-		b.setStatus("Select a regular file in the "+from.label+" pane", ActiveTheme.Peach)
-		return
-	}
-	if to.dir == "" {
-		b.setStatus("Open a destination directory first", ActiveTheme.Peach)
-		return
-	}
-	source, dest := from.join(from.dir, entry.name), to.join(to.dir, entry.name)
-	destinationDir := to.dir
-	verb, finished := "Uploading", "Uploaded"
-	transfer := b.session.Upload
-	if from.remote {
-		verb, finished = "Downloading", "Downloaded"
-		transfer = b.session.Download
-	}
-	b.run(verb+" "+entry.name+"…", func() func() {
-		bytes, err := transfer(source, dest)
-		if err != nil {
-			return func() {
-				if errors.Is(err, fs.ErrExist) {
-					b.setStatus("Destination already contains "+entry.name, ActiveTheme.Peach)
-				} else {
-					b.setStatus(verb+" failed: "+err.Error(), ActiveTheme.Red)
-				}
-			}
+	b.navigate(panel, dir, func() {
+		if panel.dir != "" {
+			panel.back = append(panel.back, panel.dir)
 		}
-		dir, entries, err := b.loadDirectory(to.remote, destinationDir)
-		return func() {
-			if err == nil {
-				to.update(dir, entries)
-			}
-			message := fmt.Sprintf("%s %s (%s)", finished, entry.name, sftpSize(bytes))
-			if err != nil {
-				b.setStatus(message+" · Refresh failed: "+err.Error(), ActiveTheme.Peach)
-				return
-			}
-			b.setStatus(message, ActiveTheme.Green)
-		}
+		panel.forward = nil
 	})
 }
 
-func compareSFTPEntries(a, b sftpEntry) int {
-	if a.mode.IsDir() != b.mode.IsDir() {
-		if a.mode.IsDir() {
-			return -1
-		}
-		return 1
-	}
-	if order := strings.Compare(strings.ToLower(a.name), strings.ToLower(b.name)); order != 0 {
+func compareSFTPNames(a, b string) int {
+	if order := strings.Compare(strings.ToLower(a), strings.ToLower(b)); order != 0 {
 		return order
 	}
-	return strings.Compare(a.name, b.name)
+	return strings.Compare(a, b)
 }
 
 func validSFTPName(name string) bool {
 	return name != "" && name != "." && name != ".." &&
-		!strings.ContainsAny(name, "/\x00") && filepath.Base(name) == name && filepath.IsLocal(name)
+		!strings.ContainsAny(name, "/\\\x00") && filepath.Base(name) == name && filepath.IsLocal(name)
 }
 
 func displaySFTPText(text string) string {

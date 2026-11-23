@@ -48,3 +48,19 @@ func TestSFTPBrowserShowsPanelLabelsWithLongPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestSFTPTextPreviewBoundsAndSanitizesContent(t *testing.T) {
+	got, err := formatSFTPPreview([]byte("\uFEFF中文\r\nsecond\tcolumn\x1b[0m"))
+	if err != nil || got != "中文\nsecond\tcolumn�[0m" {
+		t.Fatalf("preview = %q, %v", got, err)
+	}
+	if _, err := formatSFTPPreview([]byte{0x00, 'x'}); err == nil {
+		t.Fatal("binary input should not be previewed")
+	}
+	long := strings.Repeat("a", textPreviewLimit-1) + "中"
+	got, err = formatSFTPPreview([]byte(long))
+	if err != nil || !strings.Contains(got, "Preview limited to the first 256 KiB") ||
+		strings.ContainsRune(got, '中') {
+		t.Fatalf("preview at a split UTF-8 boundary did not truncate safely: %v", err)
+	}
+}

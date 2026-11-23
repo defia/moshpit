@@ -16,16 +16,9 @@ package services
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"os/exec"
-	"path"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -136,7 +129,7 @@ func startSFTP(cmd *exec.Cmd) (*sftpSession, error) {
 		<-done
 	}
 
-	client, err := sftp.NewClientPipe(responseReader, requestWriter)
+	client, err := sftp.NewClientPipe(responseReader, requestWriter, sftp.UseConcurrentWrites(true))
 	if err != nil {
 		stop()
 		if detail := diagnostics.finish(); detail != "" {
@@ -156,88 +149,3 @@ func (s *sftpSession) Close() {
 }
 
 func (s *sftpSession) Getwd() (string, error) { return s.client.Getwd() }
-
-func (s *sftpSession) ReadDir(directory string) ([]fs.FileInfo, error) {
-	return s.client.ReadDir(directory)
-}
-
-func (s *sftpSession) Upload(localFile, remoteFile string) (int64, error) {
-	// Refuse a destination collision before sending the contents.
-	if _, err := s.client.Lstat(remoteFile); err == nil {
-		return 0, fs.ErrExist
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return 0, err
-	}
-	info, err := os.Lstat(localFile)
-	if err != nil {
-		return 0, err
-	}
-	if !info.Mode().IsRegular() {
-		return 0, errors.New("select a regular local file")
-	}
-	// #nosec G304 -- the source is chosen by the user in the local file panel.
-	source, err := os.Open(localFile)
-	if err != nil {
-		return 0, err
-	}
-	defer source.Close()
-	opened, err := source.Stat()
-	if err != nil {
-		return 0, err
-	}
-	if !os.SameFile(info, opened) {
-		return 0, errors.New("the source file changed before it could be opened")
-	}
-
-	var nonce [16]byte
-	rand.Read(nonce[:])
-	tempName := path.Join(path.Dir(remoteFile), ".moshpit-transfer-"+hex.EncodeToString(nonce[:]))
-	target, err := s.client.OpenFile(tempName, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
-	if err != nil {
-		return 0, err
-	}
-	n, copyErr := io.Copy(target, source)
-	if err := errors.Join(copyErr, target.Close()); err != nil {
-		_ = s.client.Remove(tempName)
-		return n, err
-	}
-	// SFTP v3 Rename fails if the destination exists. PosixRename overwrites it.
-	if err := s.client.Rename(tempName, remoteFile); err != nil {
-		_ = s.client.Remove(tempName)
-		return n, err
-	}
-	return n, nil
-}
-
-func (s *sftpSession) Download(remoteFile, localFile string) (int64, error) {
-	if _, err := os.Lstat(localFile); err == nil {
-		return 0, fs.ErrExist
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return 0, err
-	}
-	info, err := s.client.Lstat(remoteFile)
-	if err != nil {
-		return 0, err
-	}
-	if !info.Mode().IsRegular() {
-		return 0, errors.New("select a regular remote file")
-	}
-	source, err := s.client.Open(remoteFile)
-	if err != nil {
-		return 0, err
-	}
-	defer source.Close()
-
-	target, err := os.CreateTemp(filepath.Dir(localFile), ".moshpit-transfer-")
-	if err != nil {
-		return 0, err
-	}
-	defer os.Remove(target.Name())
-	// Use the file's WriterTo implementation for streaming SFTP reads.
-	n, copyErr := io.Copy(target, source)
-	if err := errors.Join(copyErr, target.Close()); err != nil {
-		return n, err
-	}
-	// Publishing a hard link makes the completed file visible without an overwrite race.
-	return n, os.Link(target.Name(), localFile)
-}
