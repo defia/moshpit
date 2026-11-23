@@ -135,7 +135,7 @@ func parsePasswordTarget(config string) (passwordTarget, error) {
 	return target, nil
 }
 
-func (s *serverService) connectionWithSavedPassword(alias string) (*exec.Cmd, func(), error) {
+func (s *serverService) connectionWithSavedPassword(alias string, options []string, subsystem ...string) (*exec.Cmd, func(), error) {
 	if !s.PasswordStorageAvailable() || !validPasswordAlias(alias) {
 		return nil, nil, nil
 	}
@@ -168,7 +168,9 @@ func (s *serverService) connectionWithSavedPassword(alias string) (*exec.Cmd, fu
 	if target.hostKeyAlias != "" {
 		args = append(args, "-o", "HostKeyAlias="+target.hostKeyAlias)
 	}
+	args = append(args, options...)
 	args = append(args, "--", alias)
+	args = append(args, subsystem...)
 	// #nosec G204 -- options and operands are separate arguments to the system SSH client.
 	cmd := exec.Command("ssh", args...)
 	cleanup, err := attachAskpass(cmd, target, func() ([]byte, error) {

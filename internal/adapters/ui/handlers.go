@@ -90,6 +90,9 @@ func (t *tui) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'f':
 		t.handlePortForward()
 		return nil
+	case 'F':
+		t.handleSFTP()
+		return nil
 	case 'x':
 		t.handleStopForwarding()
 		return nil

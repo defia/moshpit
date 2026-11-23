@@ -91,8 +91,13 @@ Everything LazySSH already did well — non-destructive config edits, automatic 
 - 📝 Smart key selection with support for multiple keys.
 
 
+### SFTP File Browser
+
+Select a host and press `Shift+F` to open the two-pane browser. The left pane starts in the local working directory and the right pane starts in the remote login directory. Use `Tab` or the left/right arrows to change panes, and `Enter` or a click to open a directory. Select a file and press `u` to upload or `d` to download. `r` refreshes both panes and `Esc` returns to the servers list.
+
+The remote host must provide an SFTP subsystem. The browser uses the host's OpenSSH configuration and can reuse its saved Keychain password for direct, trusted password-authenticated connections. The connection dialog offers a manual retry when needed. Transfers operate on individual regular files and preserve existing files with the same name.
+
 ### Upcoming
-- 📁 Copy files between local and servers with an easy picker UI.
 - 🔑 SSH Key Deployment Features:
     - Use default local public key (`~/.ssh/id_ed25519.pub` or `~/.ssh/id_rsa.pub`)
     - Paste custom public keys manually
@@ -246,6 +251,7 @@ go build -o moshpit cmd/main.go
 | m     | Toggle SSH/Mosh protocol            |
 | M     | Bulk toggle protocol by tag         |
 | f     | Port forward                        |
+| F     | Open the two-pane SFTP browser       |
 | x     | Stop forwarding                     |
 | c     | Copy SSH command to clipboard       |
 | g     | Ping selected server                |

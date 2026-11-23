@@ -20,7 +20,7 @@ import (
 
 func DefaultStatusText() string {
 	k := Hex(ActiveTheme.Text)
-	return "[" + k + "]↑↓[-] Navigate  • [" + k + "]Enter[-] SSH  • [" + k + "]P[-] Password  • [" + k + "]f[-] Forward  • [" + k + "]x[-] Stop Forward  • [" + k + "]c[-] Copy SSH  • [" + k + "]K[-] Install Key  • [" + k + "]a[-] Add  • [" + k + "]e[-] Edit  • [" + k + "]g[-] Ping  • [" + k + "]v[-] Group  • [" + k + "]d[-] Delete  • [" + k + "]p[-] Pin/Unpin  • [" + k + "]/[-] Search  • [" + k + "]q[-] Quit"
+	return "[" + k + "]↑↓[-] Navigate  • [" + k + "]Enter[-] SSH  • [" + k + "]P[-] Password  • [" + k + "]F[-] SFTP  • [" + k + "]f[-] Forward  • [" + k + "]x[-] Stop Forward  • [" + k + "]c[-] Copy SSH  • [" + k + "]K[-] Install Key  • [" + k + "]a[-] Add  • [" + k + "]e[-] Edit  • [" + k + "]g[-] Ping  • [" + k + "]v[-] Group  • [" + k + "]d[-] Delete  • [" + k + "]p[-] Pin/Unpin  • [" + k + "]/[-] Search  • [" + k + "]q[-] Quit"
 }
 
 func NewStatusBar() *tview.TextView {

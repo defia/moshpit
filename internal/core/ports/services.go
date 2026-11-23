@@ -29,6 +29,7 @@ type ServerService interface {
 	SetProtocol(alias string, protocol string) error
 	SSH(alias string) error
 	SSHManual(alias string) error
+	OpenSFTP(alias string, manual bool) (SFTPSession, error)
 	PasswordStorageAvailable() bool
 	SaveSSHPassword(alias string, password []byte) error
 	DeleteSSHPassword(alias string) error

@@ -194,7 +194,7 @@ func (s *serverService) SSH(alias string) error {
 		return s.SSHManual(alias)
 	}
 
-	cmd, cleanup, err := s.connectionWithSavedPassword(alias)
+	cmd, cleanup, err := s.connectionWithSavedPassword(alias, nil)
 	if err != nil {
 		s.logger.Warnw("saved SSH password unavailable, using manual SSH", "alias", alias, "error", err)
 		return s.SSHManual(alias)
