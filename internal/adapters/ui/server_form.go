@@ -2187,7 +2187,7 @@ func (sf *ServerForm) dataToServer(data ServerFormData) domain.Server {
 	server := domain.Server{
 		Alias:                data.Alias,
 		Host:                 data.Host,
-		User:                 data.User,
+		User:                 strings.ReplaceAll(data.User, "%40", "@"),
 		Port:                 port,
 		IdentityFiles:        keys,
 		Tags:                 tags,

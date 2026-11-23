@@ -204,12 +204,6 @@ func TestFieldValidatorPatterns(t *testing.T) {
 		{"Port", "65536", true},
 		{"Port", "abc", true},
 
-		// User field
-		{"User", "root", false},
-		{"User", "user_name", false},
-		{"User", "user-name", false},
-		{"User", "1user", true}, // Can't start with number
-
 		// ConnectTimeout field
 		{"ConnectTimeout", "none", false},
 		{"ConnectTimeout", "30", false},
@@ -253,6 +247,42 @@ func TestFieldValidatorPatterns(t *testing.T) {
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateField(%s, %s) error = %v, wantErr %v", tt.field, tt.value, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestServerFormUsername(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{input: ""},
+		{input: "root", want: "root"},
+		{input: "user_name", want: "user_name"},
+		{input: "user-name", want: "user-name"},
+		{input: "1user", want: "1user"},
+		{input: "user@example.com", want: "user@example.com"},
+		{input: "user%40example.com", want: "user@example.com"},
+		{input: "user%40domain@target", want: "user@domain@target"},
+		{input: "user%20name", wantErr: true},
+		{input: "user name", wantErr: true},
+		{input: "user\nHost other", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			form := &ServerForm{validation: NewValidationState()}
+			if err := form.validateField("User", tt.input); (err != "") != tt.wantErr {
+				t.Fatalf("validateField(User, %q) = %q, want error: %v", tt.input, err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			server := form.dataToServer(ServerFormData{User: tt.input})
+			if server.User != tt.want {
+				t.Errorf("saved username = %q, want %q", server.User, tt.want)
 			}
 		})
 	}
