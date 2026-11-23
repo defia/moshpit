@@ -41,7 +41,9 @@ type sftpAction struct {
 }
 
 func (b *sftpBrowser) restore() {
-	b.app.SetRoot(b.root, true).SetFocus(b.active.list)
+	// SetRoot initially focuses the local list and updates b.active.
+	focus := b.active.list
+	b.app.SetRoot(b.root, true).SetFocus(focus)
 }
 
 func (b *sftpBrowser) actionMenu(title string, actions []sftpAction) {

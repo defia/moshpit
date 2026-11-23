@@ -15,6 +15,7 @@
 package ui
 
 import (
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -62,5 +63,52 @@ func TestSFTPTextPreviewBoundsAndSanitizesContent(t *testing.T) {
 	if err != nil || !strings.Contains(got, "Preview limited to the first 256 KiB") ||
 		strings.ContainsRune(got, '中') {
 		t.Fatalf("preview at a split UTF-8 boundary did not truncate safely: %v", err)
+	}
+}
+
+func TestSFTPDeleteActionKeepsRemoteDirectorySelected(t *testing.T) {
+	for _, localSelection := range []sftpEntry{
+		{name: "..", mode: fs.ModeDir},
+		{name: "local-file.txt"},
+	} {
+		t.Run(localSelection.name, func(t *testing.T) {
+			app := tview.NewApplication()
+			browser := newSFTPBrowser(app, nil, "test host", nil)
+			browser.local.update("/local", []sftpEntry{localSelection})
+			browser.remote.update("/remote", []sftpEntry{{name: "delete-directory", mode: fs.ModeDir}})
+			app.SetRoot(browser.root, true).SetFocus(browser.remote.list)
+
+			browser.handleKey(tcell.NewEventKey(tcell.KeyRune, 'm', tcell.ModNone))
+			menu, ok := app.GetFocus().(*tview.List)
+			if !ok || menu == browser.local.list || menu == browser.remote.list {
+				t.Fatal("SFTP actions menu did not open")
+			}
+			for index := 0; index < menu.GetItemCount(); index++ {
+				label, _ := menu.GetItemText(index)
+				if !strings.HasPrefix(label, "Delete ") {
+					continue
+				}
+				menu.SetCurrentItem(index)
+				menu.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), func(p tview.Primitive) {
+					app.SetFocus(p)
+				})
+				if browser.active != browser.remote {
+					t.Fatalf("Delete switched the selected pane to %s; status = %q",
+						browser.active.label, strings.TrimSpace(browser.status.GetText(false)))
+				}
+				cancel, ok := app.GetFocus().(*tview.Button)
+				if !ok || cancel.GetLabel() != "Cancel" {
+					t.Fatal("remote directory deletion did not open a confirmation with Cancel focused")
+				}
+				cancel.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), func(p tview.Primitive) {
+					app.SetFocus(p)
+				})
+				if app.GetFocus() != browser.remote.list || browser.active != browser.remote {
+					t.Fatal("cancel did not return focus to the remote pane")
+				}
+				return
+			}
+			t.Fatal("SFTP actions menu is missing Delete")
+		})
 	}
 }
