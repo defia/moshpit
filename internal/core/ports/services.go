@@ -28,6 +28,10 @@ type ServerService interface {
 	SetPinned(alias string, pinned bool) error
 	SetProtocol(alias string, protocol string) error
 	SSH(alias string) error
+	SSHManual(alias string) error
+	PasswordStorageAvailable() bool
+	SaveSSHPassword(alias string, password []byte) error
+	DeleteSSHPassword(alias string) error
 	SSHWithArgs(alias string, extraArgs []string) error
 	StartForward(alias string, extraArgs []string) (int, error)
 	StopForwarding(alias string) error
@@ -36,6 +40,15 @@ type ServerService interface {
 	CopySSHKey(alias, keyPath string) error
 	ListSSHKeys() ([]SSHKeyInfo, error)
 	Ping(server domain.Server) (bool, time.Duration, error)
+}
+
+// PasswordStore stores at most one password per SSH alias. A binding identifies
+// the resolved destination and user, and an empty binding checks only the alias.
+type PasswordStore interface {
+	Has(alias, binding string) (bool, error)
+	Read(alias, binding string) ([]byte, error)
+	Save(alias, binding string, password []byte) error
+	Delete(alias string) error
 }
 
 // SSHKeyInfo describes a candidate public key the user can install on a remote

@@ -38,17 +38,19 @@ type serverService struct {
 	serverRepository ports.ServerRepository
 	logger           *zap.SugaredLogger
 	detector         *ProtocolDetector
+	passwords        ports.PasswordStore
 
 	fwMu     sync.Mutex
 	forwards map[string][]*os.Process
 }
 
 // NewServerService creates a new instance of serverService.
-func NewServerService(logger *zap.SugaredLogger, sr ports.ServerRepository) ports.ServerService {
+func NewServerService(logger *zap.SugaredLogger, sr ports.ServerRepository, passwords ports.PasswordStore) ports.ServerService {
 	return &serverService{
 		logger:           logger,
 		serverRepository: sr,
 		detector:         NewProtocolDetector(),
+		passwords:        passwords,
 	}
 }
 
@@ -183,17 +185,36 @@ func (s *serverService) SSH(alias string) error {
 		}
 	}
 
-	var cmd *exec.Cmd
-	if protocol == "mosh" && s.detector.IsMoshAvailable() {
-		s.logger.Infow("using mosh protocol", "alias", alias)
-		cmd = exec.Command("mosh", alias)
-	} else {
-		if protocol == "mosh" && !s.detector.IsMoshAvailable() {
-			s.logger.Warnw("mosh unavailable, falling back to ssh", "alias", alias)
+	if protocol == "mosh" {
+		if s.detector.IsMoshAvailable() {
+			s.logger.Infow("using mosh protocol", "alias", alias)
+			return s.runInteractiveConnection(alias, exec.Command("mosh", alias))
 		}
-		cmd = exec.Command("ssh", alias)
+		s.logger.Warnw("mosh unavailable, falling back to ssh", "alias", alias)
+		return s.SSHManual(alias)
 	}
 
+	cmd, cleanup, err := s.connectionWithSavedPassword(alias)
+	if err != nil {
+		s.logger.Warnw("saved SSH password unavailable, using manual SSH", "alias", alias, "error", err)
+		return s.SSHManual(alias)
+	}
+	if cmd == nil {
+		return s.SSHManual(alias)
+	}
+	defer cleanup()
+	if err := s.runInteractiveConnection(alias, cmd); err != nil {
+		return fmt.Errorf("saved-password SSH failed. Press P for manual login or to update the password: %w", err)
+	}
+	return nil
+}
+
+func (s *serverService) SSHManual(alias string) error {
+	// #nosec G204 -- the alias is passed as one operand after the option terminator.
+	return s.runInteractiveConnection(alias, exec.Command("ssh", "--", alias))
+}
+
+func (s *serverService) runInteractiveConnection(alias string, cmd *exec.Cmd) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

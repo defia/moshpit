@@ -14,7 +14,7 @@ No more memorizing IP addresses, hand-editing `~/.ssh/config`, or remembering wh
 ║   [ ✓ ]   Safety first -- no new SSH stack, no key handling.           ║
 ║                                                                        ║
 ║       -  Connects through your system's OpenSSH (or Mosh) binary       ║
-║       -  Never reads, stores, or transmits your keys or passwords      ║
+║       -  Optional SSH passwords are stored in macOS Keychain          ║
 ║       -  Edits ~/.ssh/config non-destructively, with auto-backups      ║
 ║       -  Protocol prefs live in ~/.moshpit/, never in your SSH config  ║
 ║                                                                        ║
@@ -102,14 +102,13 @@ Everything LazySSH already did well — non-destructive config edits, automatic 
 
 ## 🔐 Security Notice
 
-moshpit does not introduce any new security risks.
-It is simply a UI/TUI wrapper around your existing `~/.ssh/config` file.
+moshpit uses your existing `~/.ssh/config` and the system OpenSSH client.
 
 - All SSH connections are executed through your system's native ssh binary (OpenSSH).
 
 - Mosh connections are executed through your system's mosh binary when available.
 
-- Private keys, passwords, and credentials are never stored, transmitted, or modified by moshpit.
+- SSH private keys stay with OpenSSH and your existing agent. Opt-in SSH passwords are stored in macOS Keychain and supplied to OpenSSH through its private askpass pipe. SSH configuration, metadata, backups, and logs carry no saved passwords.
 
 - Your existing IdentityFile paths and ssh-agent integrations work exactly as before.
 
@@ -119,6 +118,14 @@ It is simply a UI/TUI wrapper around your existing `~/.ssh/config` file.
 
 - File permissions on your SSH config are preserved to ensure security.
 
+
+### Saving an SSH password on macOS
+
+Build on macOS with `CGO_ENABLED=1 go build -o bin/moshpit ./cmd` to enable Keychain support.
+
+Select a host and press `P` to enter and save its password. Saving again replaces the password. The same menu lets you delete the saved entry or connect manually, for example to trust a new host key or handle a password change.
+
+Press `Enter` to use the saved password for a direct SSH connection that uses standard SSH password authentication and has a known host key. Each saved password is associated with the selected alias and its resolved host, port, and full username. Mosh, jump hosts, and keyboard-interactive prompts such as OTP use manual authentication.
 
 ## 🛡️ Config Safety: Non‑destructive writes and backups
 
@@ -235,6 +242,7 @@ go build -o moshpit cmd/main.go
 | /     | Toggle search bar                   |
 | ↑↓/jk | Navigate servers                    |
 | Enter | Connect to selected server          |
+| P     | Manage SSH password or connect manually (macOS Keychain-enabled builds) |
 | m     | Toggle SSH/Mosh protocol            |
 | M     | Bulk toggle protocol by tag         |
 | f     | Port forward                        |

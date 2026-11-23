@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/taylorbanks/moshpit/internal/adapters/data/keychain"
 	"github.com/taylorbanks/moshpit/internal/adapters/data/ssh_config_file"
 	"github.com/taylorbanks/moshpit/internal/logger"
 
@@ -74,6 +75,9 @@ func getMetadataPath(home string) string {
 }
 
 func main() {
+	if handled, exitCode := services.RunAskpass(); handled {
+		os.Exit(exitCode)
+	}
 	log, err := logger.New("MOSHPIT")
 	if err != nil {
 		fmt.Println(err)
@@ -114,7 +118,7 @@ func main() {
 	}
 
 	serverRepo := ssh_config_file.NewRepository(log, sshConfigFile, metaDataFile)
-	serverService := services.NewServerService(log, serverRepo)
+	serverService := services.NewServerService(log, serverRepo, keychain.New())
 	tui := ui.NewTUI(log, serverService, version, gitCommit, func(themeName string) {
 		appConfig.Theme = themeName
 		if err := configMgr.Save(appConfig); err != nil {

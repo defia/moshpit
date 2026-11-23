@@ -66,6 +66,9 @@ func (t *tui) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'p':
 		t.handleServerPin()
 		return nil
+	case 'P':
+		t.handleSSHPassword()
+		return nil
 	case 's':
 		t.handleSortToggle()
 		return nil
@@ -404,10 +407,14 @@ func (t *tui) handleServerConnect() {
 			)
 		}
 
+		var err error
 		t.app.Suspend(func() {
-			_ = t.serverService.SSH(server.Alias)
+			err = t.serverService.SSH(server.Alias)
 		})
 		t.refreshServerList()
+		if err != nil {
+			t.showStatusTempColor(tview.Escape(err.Error()), Hex(ActiveTheme.Red))
+		}
 	}
 }
 
